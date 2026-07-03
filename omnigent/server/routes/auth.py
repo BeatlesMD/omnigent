@@ -13,6 +13,7 @@ These routes are only mounted when ``OMNIGENT_AUTH_PROVIDER=oidc``.
 from __future__ import annotations
 
 import logging
+import os
 import secrets
 import time
 from dataclasses import dataclass, field
@@ -688,6 +689,24 @@ def _claim_is_verified_true(value: object) -> bool:
     return isinstance(value, str) and value.strip().lower() == "true"
 
 
+def _trust_unverified_email() -> bool:
+    """Whether to accept an id_token ``email`` that lacks ``email_verified``.
+
+    Some IdPs authenticate the user and own mail delivery out of band but do not
+    emit ``email_verified`` in the id_token — notably Cloudflare Access with its
+    built-in IdP. An operator who trusts such an issuer sets
+    ``OMNIGENT_OIDC_TRUST_UNVERIFIED_EMAIL=1`` to accept the address. Defaults off,
+    so the strict verified-only behavior is unchanged unless explicitly opted in.
+
+    :returns: ``True`` when the env var is set to a truthy value.
+    """
+    return os.environ.get("OMNIGENT_OIDC_TRUST_UNVERIFIED_EMAIL", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
 def _resolve_oidc_email(
     token_json: dict,
     config: OIDCConfig,
@@ -740,11 +759,19 @@ def _resolve_oidc_email(
     # token only proves IdP provenance, not mailbox ownership.
     # Absent/false ``email_verified`` is a hard reject.
     if not _claim_is_verified_true(claims.get("email_verified")):
-        _logger.warning(
-            "Rejecting id_token: email %r present but email_verified is not true",
-            email,
-        )
-        return None
+        if _trust_unverified_email():
+            _logger.info(
+                "id_token email %r lacks email_verified=true; accepting it because "
+                "OMNIGENT_OIDC_TRUST_UNVERIFIED_EMAIL is set (the issuer vouches for "
+                "the address out of band).",
+                email,
+            )
+        else:
+            _logger.warning(
+                "Rejecting id_token: email %r present but email_verified is not true",
+                email,
+            )
+            return None
 
     return email
 
