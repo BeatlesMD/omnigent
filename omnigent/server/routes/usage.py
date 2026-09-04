@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -10,6 +11,7 @@ from fastapi import APIRouter, Request
 
 from omnigent._wrapper_labels import WRAPPER_LABEL_KEY
 from omnigent.entities import Conversation
+from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.runtime.policies.builder import load_session_tree, load_session_usage
 from omnigent.server.auth import RESERVED_USER_LOCAL, AuthProvider
 from omnigent.server.feature_flags import Feature, FeatureFlags, resolve_feature_flags
@@ -81,6 +83,20 @@ def _collect_other_harnesses(
     return sorted(seen) if seen else None
 
 
+def _optional_agent_metadata(
+    resolver: Callable[[Conversation], str | None], conv: Conversation
+) -> str | None:
+    """Keep historical costs readable when a retired agent spec is invalid."""
+    try:
+        return resolver(conv)
+    except OmnigentError as error:
+        # Display metadata may require a retired callable. Do not hide auth,
+        # storage, or other failures, and never omit the session or its cost.
+        if error.code != ErrorCode.INVALID_INPUT:
+            raise
+        return None
+
+
 def _resolve_session_harness(conv: Conversation) -> str | None:
     """
     Best-effort harness resolution for the usage report.
@@ -96,7 +112,7 @@ def _resolve_session_harness(conv: Conversation) -> str | None:
     if wrapper:
         # Strip the "-ui" suffix for display: "claude-code-native-ui" → "claude-code-native"
         return wrapper.removesuffix("-ui") if wrapper.endswith("-ui") else wrapper
-    return _resolve_harness_impl(conv)
+    return _optional_agent_metadata(_resolve_harness_impl, conv)
 
 
 def _session_cost(usage: dict[str, Any]) -> float:
@@ -184,7 +200,7 @@ def _build_usage_report(
                     harness=primary_harness,
                     other_harnesses=other_harnesses,
                     llm_model=(
-                        conv.model_override or _resolve_llm_model(conv)
+                        conv.model_override or _optional_agent_metadata(_resolve_llm_model, conv)
                         if include_page_details
                         else None
                     ),
