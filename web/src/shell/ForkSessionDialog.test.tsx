@@ -217,6 +217,8 @@ beforeEach(() => {
 
 afterEach(cleanup);
 
+afterEach(() => vi.unstubAllEnvs());
+
 describe("ForkSessionDialog", () => {
   it("leaves the name optional, suggesting 'Fork of <title>' as the placeholder", () => {
     renderDialog({ sourceTitle: "My session" });
@@ -1027,5 +1029,48 @@ describe("ForkSessionDialog", () => {
       fireEvent.click(screen.getByTestId("fork-session-connect-host-toggle"));
       expect(screen.getByTestId("connect-host-command")).toBeInTheDocument();
     });
+  });
+});
+
+describe("hidden source agent forks", () => {
+  it.each(["homelab-observer", "homelab-engineer", "claude-sdk (fork ag_a) (switch ag_b)"])(
+    "requires a visible replacement for %s",
+    async (name) => {
+      vi.stubEnv("VITE_HIDDEN_AGENT_NAMES", "homelab-observer,homelab-engineer,claude-sdk");
+      useSessionAgentMock.mockReturnValue({
+        data: { id: "ag_source", name, harness: "claude-sdk" },
+      } as unknown as ReturnType<typeof useSessionAgent>);
+      forkSessionMock.mockResolvedValue({ id: "conv_fork" } as unknown as Awaited<
+        ReturnType<typeof forkSession>
+      >);
+      renderDialog();
+      expect(screen.getByTestId("fork-session-agent-select")).toHaveTextContent("Choose an agent");
+      expect(screen.getByTestId("fork-session-submit")).toBeDisabled();
+      fireEvent.click(screen.getByTestId("fork-session-submit"));
+      expect(forkSessionMock).not.toHaveBeenCalled();
+      openAgentSelect();
+      expect(screen.queryByTestId("fork-session-agent-option-same")).not.toBeInTheDocument();
+      fireEvent.click(screen.getByTestId("fork-session-agent-option-ag_claude_native"));
+      fireEvent.click(screen.getByTestId("fork-session-submit"));
+      await waitFor(() =>
+        expect(forkSessionMock).toHaveBeenCalledWith(
+          "conv_src",
+          undefined,
+          "ag_claude_native",
+          undefined,
+          {},
+        ),
+      );
+    },
+  );
+
+  it("waits for source metadata before allowing a same-agent fork", () => {
+    useSessionAgentMock.mockReturnValue({ data: undefined } as unknown as ReturnType<
+      typeof useSessionAgent
+    >);
+    renderDialog();
+    expect(screen.getByTestId("fork-session-submit")).toBeDisabled();
+    openAgentSelect();
+    expect(screen.queryByTestId("fork-session-agent-option-same")).not.toBeInTheDocument();
   });
 });
