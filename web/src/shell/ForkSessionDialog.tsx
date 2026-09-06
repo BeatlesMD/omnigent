@@ -30,6 +30,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { forkSession, launchRunner } from "@/lib/sessionsApi";
+import { isAgentSelectable } from "@/lib/agentVisibility";
 import { useAvailableAgents, prefetchAvailableAgentDetails } from "@/hooks/useAvailableAgents";
 import type { AvailableAgent } from "@/hooks/useAvailableAgents";
 import { partitionAgentsByKind } from "@/lib/agentGrouping";
@@ -874,7 +875,13 @@ export function ForkSessionForm({
     [switchableAgents],
   );
 
+  // The source is read separately from the selectable catalog. Do not let
+  // "same as original" bypass visibility, including while metadata is loading.
+  const sourceSelectable = sourceAgent != null && isAgentSelectable(sourceAgent.name);
   const switching = agentChoice !== SAME_AS_SOURCE;
+  const agentChoiceValid = switching
+    ? switchableAgents.some((agent) => agent.id === agentChoice)
+    : sourceSelectable;
 
   // Source session snapshot — seeds the run-config pickers on a same-harness
   // fork (its current model / effort / permission mode). Cheap: the chat page
@@ -1041,9 +1048,10 @@ export function ForkSessionForm({
       : (sandboxRepoName ?? sandboxRepoUrl.trim());
   // A coding source can only start once a live host + valid directory are
   // picked; a sandbox clone needs neither — the server provisions both.
-  const canSubmit = sandboxSelected
-    ? sandboxRepoValid
-    : !isCodingSource || (selectedHostOnline && workspaceValid);
+  const canSubmit =
+    agentChoiceValid &&
+    (sandboxSelected ? sandboxRepoValid : !isCodingSource || (selectedHostOnline && workspaceValid));
+
 
   // Conflict hint: other *connected* sessions already working in the picked
   // directory on this host (same wiring as NewChatDialog).
@@ -1411,6 +1419,8 @@ export function ForkSessionForm({
                 {switching ? (
                   (switchableAgents.find((a) => a.id === agentChoice)?.display_name ??
                   sourceAgentDisplay)
+                ) : !sourceSelectable ? (
+                  "Choose an agent"
                 ) : (
                   <>
                     {sourceAgentDisplay}{" "}
@@ -1420,14 +1430,16 @@ export function ForkSessionForm({
               </SelectValue>
             </SelectTrigger>
             <SelectContent position="popper" align="start">
-              <SelectItem
-                value={SAME_AS_SOURCE}
-                data-testid="fork-session-agent-option-same"
-                className="text-sm"
-              >
-                {sourceAgentDisplay}{" "}
-                <span className="text-muted-foreground">(same as original session)</span>
-              </SelectItem>
+              {sourceSelectable && (
+                <SelectItem
+                  value={SAME_AS_SOURCE}
+                  data-testid="fork-session-agent-option-same"
+                  className="text-sm"
+                >
+                  {sourceAgentDisplay}{" "}
+                  <span className="text-muted-foreground">(same as original session)</span>
+                </SelectItem>
+              )}
               {builtinSwitchable.map((agent) => (
                 <SelectItem
                   key={agent.id}

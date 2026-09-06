@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { authenticatedFetch } from "@/lib/identity";
+import { isAgentSelectable } from "@/lib/agentVisibility";
 import { agentRootName } from "@/lib/forkHarness";
 import { capitalizeAgentName, useAcpHarnessIds, useHarnessLabels } from "@/lib/agentLabels";
 import {
@@ -526,7 +527,11 @@ export function useAvailableAgents(options: UseAvailableAgentsOptions = {}) {
   const harnessLabels = useHarnessLabels(enabled);
   const select = useMemo(
     () => (agents: AvailableAgent[]) =>
-      applyAcpHarnessCatalog(agents, acpHarnessIds, harnessLabels),
+      // Filter the observed result, including cache enrichment and the pinned
+      // recovery pass. Historical session queries themselves stay untouched.
+      applyAcpHarnessCatalog(agents, acpHarnessIds, harnessLabels).filter((agent) =>
+        isAgentSelectable(agent.name),
+      ),
     [acpHarnessIds, harnessLabels],
   );
   const queryClient = useQueryClient();
