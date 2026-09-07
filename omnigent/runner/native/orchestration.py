@@ -2214,6 +2214,10 @@ async def _auto_create_pi_terminal(
                 or provider.credential_warning
                 or launch.effort_warning
             )
+        elif spec_model and os.environ.get("OMNIGENT_PI_NATIVE_CATALOG") == "1":
+            # Pi resolves the full provider/model reference against its own
+            # catalog and personal auth; do not generate a managed agent dir.
+            pi_args.extend(["--model", spec_model])
     # Inherit the agent's os_env so its sandbox (e.g. ``type: none``),
     # egress_rules and env_passthrough are honoured. Without ``sandbox`` here
     # and ``parent_os_env`` below, launch_required_terminal falls back to

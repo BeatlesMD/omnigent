@@ -3605,3 +3605,115 @@ async def test_auto_create_claude_terminal_default_pin_requires_a_fresh_catalog(
         assert model_catalog_store.read_catalog("claude-native", fingerprint) == refreshed
 
     await fake_client.aclose()
+
+
+@pytest.mark.parametrize(
+    ("enabled", "selection", "passthrough", "expected"),
+    [
+        (True, "openrouter/vendor/model:free", None, "openrouter/vendor/model:free"),
+        (True, "openrouter/vendor/other", ["--model", "personal-default"], "personal-default"),
+        (True, None, None, None),
+        (False, "openrouter/vendor/model", None, None),
+    ],
+)
+@pytest.mark.asyncio
+async def test_pi_personal_model_reaches_terminal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    enabled: bool,
+    selection: str | None,
+    passthrough: list[str] | None,
+    expected: str | None,
+) -> None:
+    """The launch picker must not drop native provider-qualified models."""
+    monkeypatch.setenv("OMNIGENT_PI_NATIVE_CATALOG", "1" if enabled else "0")
+    import omnigent.pi_native as pi_native
+    import omnigent.pi_native_bridge as pi_native_bridge
+    import omnigent.pi_native_credentials as pi_native_credentials
+
+    monkeypatch.setenv("RUNNER_SERVER_URL", "http://127.0.0.1:8000")
+    monkeypatch.setattr(pi_native_bridge, "_BRIDGE_ROOT", tmp_path / "pi-bridge")
+    # The lifecycle of the launch — not the binary or credentials — is under
+    # test, so neither a real Pi install nor a configured provider is needed.
+    monkeypatch.setattr(pi_native, "resolve_pi_executable", lambda: "pi")
+    # Accept the ``model`` kwarg the runner now threads through (the spec model
+    # → models.json path); None still skips provider injection here.
+    monkeypatch.setattr(
+        pi_native_credentials, "resolve_pi_native_provider", lambda **_kwargs: None
+    )
+
+    # Skip the GET /v1/sessions round-trip: hand the flow a ready launch
+    # config pointing at the tmp workspace.
+    async def _fake_launch_config(**_kwargs: Any) -> _PiNativeLaunchConfig:
+        return _PiNativeLaunchConfig(
+            workspace=tmp_path,
+            server_url="http://127.0.0.1:8000",
+            terminal_launch_args=passthrough,
+            model_override=selection,
+            external_session_id=None,
+        )
+
+    monkeypatch.setattr("omnigent.runner.app._pi_native_launch_config", _fake_launch_config)
+
+    captured: dict[str, Any] = {}
+
+    class _FakeResourceRegistry:
+        """Records the launch; exposes ONLY the required-terminal launch API."""
+
+        terminal_registry = None
+
+        async def launch_required_terminal(
+            self,
+            *,
+            session_id: str,
+            terminal_name: str,
+            session_key: str,
+            spec: Any,
+            resource_role: str | None = None,
+            parent_os_env: Any = None,
+        ) -> SessionResourceView:
+            """Record the launch and return a terminal resource view."""
+            captured["terminal_name"] = terminal_name
+            captured["session_key"] = session_key
+            captured["resource_role"] = resource_role
+            captured["spec"] = spec
+            return SessionResourceView(
+                id="terminal_pi_main",
+                type="terminal",
+                session_id=session_id,
+                name="pi:main",
+                metadata={"terminal_name": "pi", "session_key": "main", "running": True},
+            )
+
+    published: list[dict[str, Any]] = []
+
+    await _auto_create_pi_terminal(
+        "47f049b9d13df4db397c7f46859b825f",
+        _FakeResourceRegistry(),  # type: ignore[arg-type]
+        lambda _sid, evt: published.append(evt),
+        server_client=NullServerClient(),  # type: ignore[arg-type]
+    )
+
+    # Required lifecycle (parity with claude-native), correct terminal identity.
+    assert captured["terminal_name"] == "pi"
+    assert captured["session_key"] == "main"
+    assert captured["resource_role"] == PI_NATIVE_TERMINAL_ROLE
+    assert captured["spec"].command == "pi"
+    config = json.loads(
+        Path(captured["spec"].env[pi_native_bridge.PI_NATIVE_CONFIG_ENV_VAR]).read_text()
+    )
+    tool_names = {tool["name"] for tool in config["tools"]}
+    assert {"list_comments", "sys_session_list"} <= tool_names
+    # The fresh terminal is surfaced on the live stream for the Terminal toggle.
+    assert any(evt.get("type") == "session.resource.created" for evt in published)
+
+    args = captured["spec"].args
+    if expected is None:
+        assert "--model" not in args
+    else:
+        assert args.count("--model") == 1
+        assert args[args.index("--model") + 1] == expected
+    assert "PI_CODING_AGENT_DIR" not in captured["spec"].env
+    assert "OPENROUTER_API_KEY" not in captured["spec"].env
+    assert not list((tmp_path / "pi-bridge").rglob("auth.json"))
+    assert not list((tmp_path / "pi-bridge").rglob("models.json"))
