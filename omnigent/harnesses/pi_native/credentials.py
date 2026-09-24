@@ -474,6 +474,62 @@ def pi_own_login_model_arg(selection: str) -> str | None:
     return None if "/" in split[1] else split[1]
 
 
+def _pi_login_model_options() -> list[dict[str, object]]:
+    """Ask Pi for its authenticated native catalog without loading extensions."""
+    from omnigent.harnesses.pi_native.main import resolve_pi_executable
+
+    # Pi 0.87 lists provider/model plus four capability columns. Keep its
+    # catalog refresh/cache and authentication on the launching user's host.
+    try:
+        result = subprocess.run(
+            [
+                resolve_pi_executable(),
+                "--no-extensions",
+                "--no-skills",
+                "--no-prompt-templates",
+                "--no-themes",
+                "--no-context-files",
+                "--no-approve",
+                "--no-session",
+                "--list-models",
+            ],
+            cwd=Path.home(),
+            env={**os.environ, "NO_COLOR": "1", "PI_TELEMETRY": "0"},
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=10,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        # Diagnostics can contain provider credentials; never relay them.
+        _LOGGER.warning("Pi native model catalog unavailable; check personal Pi login")
+        return []
+    options: dict[str, dict[str, object]] = {}
+    in_table = False
+    for line in result.stdout.splitlines():
+        columns = line.split()
+        if columns == ["provider", "model", "context", "max-out", "thinking", "images"]:
+            in_table = True
+            continue
+        if not in_table or len(columns) != 6:
+            continue
+        provider_id, model_id, context, max_out, thinking, images = columns
+        if (
+            not re.fullmatch(r"[\w.-]+", provider_id)
+            or not re.fullmatch(r"[^\s\x00-\x1f\x7f]+", model_id)
+            or not all(re.fullmatch(r"[0-9]+(?:\.[0-9]+)?[KM]?", n) for n in (context, max_out))
+            or thinking not in {"yes", "no"}
+            or images not in {"yes", "no"}
+        ):
+            continue
+        qualified = f"{provider_id}/{model_id}"
+        options[qualified] = {"id": qualified, "model": qualified, "displayName": qualified}
+    return [options[key] for key in sorted(options)]
+
+
+
 def pi_native_model_options() -> list[dict[str, object]]:
     """Return the pre-launch Pi model choices for this host.
 
@@ -483,6 +539,8 @@ def pi_native_model_options() -> list[dict[str, object]]:
     """
     provider = resolve_pi_native_provider()
     if provider is None:
+        if os.environ.get("OMNIGENT_PI_NATIVE_CATALOG") == "1":
+            return _pi_login_model_options()
         return pi_own_login_model_options()
 
     options: dict[str, dict[str, object]] = {}

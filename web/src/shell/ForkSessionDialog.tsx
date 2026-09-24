@@ -1052,7 +1052,6 @@ export function ForkSessionForm({
     agentChoiceValid &&
     (sandboxSelected ? sandboxRepoValid : !isCodingSource || (selectedHostOnline && workspaceValid));
 
-
   // Conflict hint: other *connected* sessions already working in the picked
   // directory on this host (same wiring as NewChatDialog).
   const { data: directorySessions } = useDirectorySessions(

@@ -1428,10 +1428,13 @@ describe("hidden source agent forks", () => {
       await waitFor(() =>
         expect(forkSessionMock).toHaveBeenCalledWith(
           "conv_src",
-          undefined,
-          "ag_claude_native",
-          undefined,
-          {},
+          {
+            title: undefined,
+            agentId: "ag_claude_native",
+            upToResponseId: undefined,
+            config: {},
+            sandbox: undefined,
+          },
         ),
       );
     },
