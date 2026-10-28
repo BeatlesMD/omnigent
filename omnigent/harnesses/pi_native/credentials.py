@@ -582,6 +582,10 @@ def _pi_login_model_options() -> list[dict[str, object]]:
         if not in_table or len(columns) != 6:
             continue
         provider_id, model_id, context, max_out, thinking, images = columns
+        if provider_id in _PI_MANAGED_PROVIDER_IDS:
+            # Own-login launch cannot address managed provider rows: its
+            # selection parser strips their prefixes or falls back to default.
+            continue
         if (
             not re.fullmatch(r"[\w.-]+", provider_id)
             or not re.fullmatch(r"[^\s\x00-\x1f\x7f]+", model_id)

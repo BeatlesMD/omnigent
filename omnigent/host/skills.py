@@ -75,7 +75,11 @@ class HostSkillDiscovery:
                 # Personal/plugin skills remain available; after launch the
                 # saved session workspace supplies the actual checkout.
                 seed = os.environ.get("OMNIGENT_SKILL_PREVIEW_SEED")
-                roots = () if seed and root == Path(seed).expanduser().resolve() else (root,)
+                roots = (
+                    ()
+                    if seed and root.resolve().is_relative_to(Path(seed).expanduser().resolve())
+                    else (root,)
+                )
                 ctx = skill_source_context_from_env(
                     roots=roots, harness=frame.harness, skills_filter=frame.skills_filter
                 )
