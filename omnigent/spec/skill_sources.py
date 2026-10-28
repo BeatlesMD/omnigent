@@ -518,6 +518,36 @@ def claude_host_skills(ctx: SkillSourceContext) -> list[SkillSpec]:
     return standalone + _claude_plugin_skills(ctx)
 
 
+def _codex_workspace_skills(ctx: SkillSourceContext) -> list[SkillSpec]:
+    """Preview the native CLI's selected-workspace .agents/skills tier.
+
+    Stop at the nearest Git root (including linked worktrees). Outside Git,
+    inspect only the selected directory. Do not treat bundle directories or
+    unrelated ancestors as additional workspaces, or install repo skills into
+    a user's global Codex home.
+    """
+    if not ctx.is_native or not ctx.roots or ctx.skills_filter == "none":
+        return []
+    current = ctx.roots[0].resolve()
+    boundary = next(
+        (path for path in (current, *current.parents) if (path / ".git").exists()),
+        current,
+    )
+    names = set(ctx.skills_filter) if isinstance(ctx.skills_filter, list) else None
+    out: list[SkillSpec] = []
+    while True:
+        skipped: list[str] = []
+        out.extend(
+            skill for skill in _discover_skills(current / ".agents" / "skills", skipped=skipped)
+            if names is None or skill_matches_names(skill, names)
+        )
+        for detail in skipped:
+            _log.warning("Skipping workspace skill: %s", detail)
+        if current == boundary:
+            return out
+        current = current.parent
+
+
 def codex_host_skills(ctx: SkillSourceContext) -> list[SkillSpec]:
     """
     Codex bundle, standalone, and enabled plugin skills under the filter.
@@ -554,7 +584,10 @@ def codex_host_skills(ctx: SkillSourceContext) -> list[SkillSpec]:
 
     host_override = ctx.codex_home if ctx.is_native else None
     sources = codex_skill_sources(ctx.bundle_dir, ctx.home, codex_home=host_override)
-    out: list[SkillSpec] = []
+    # Native Codex already loads these from its launch cwd. The menu omitted
+    # them because the legacy source builder only covers seeded-home skills.
+    # resolve_session_skills keeps explicit bundled skills ahead of this tier.
+    out = _codex_workspace_skills(ctx)
     for name, skill_dir in select_codex_skill_dirs(ctx.skills_filter, sources).items():
         try:
             spec = _parse_skill(skill_dir / "SKILL.md")

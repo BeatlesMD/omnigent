@@ -1269,7 +1269,7 @@ def _populate_codex_home_config(
             # its timeout. auth.json alone cannot supply these provider tables.
             source_config = tomlkit.parse(source_file.read_text())
             minimal_document = tomlkit.document()
-            for key in ("model_provider", "model_providers", "profiles"):
+            for key in ("model_provider", "model_providers", "profiles", "analytics", "feedback", "otel"):
                 if key in source_config:
                     minimal_document[key] = source_config[key]
             dest_path.write_text(tomlkit.dumps(minimal_document))

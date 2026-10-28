@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import tempfile
 import threading
 import time
@@ -68,8 +69,15 @@ class HostSkillDiscovery:
                 self._cache.move_to_end(key)
                 return list(cached[1])
             if frame.session_id is None:
+                # OmniDev's protected clone is deliberately stale. A new
+                # worktree's base is not included in this discovery frame, so
+                # never advertise seed-repository skills as a launch preview.
+                # Personal/plugin skills remain available; after launch the
+                # saved session workspace supplies the actual checkout.
+                seed = os.environ.get("OMNIGENT_SKILL_PREVIEW_SEED")
+                roots = () if seed and root == Path(seed).expanduser().resolve() else (root,)
                 ctx = skill_source_context_from_env(
-                    roots=(root,), harness=frame.harness, skills_filter=frame.skills_filter
+                    roots=roots, harness=frame.harness, skills_filter=frame.skills_filter
                 )
                 skills = resolve_harness_skills(ctx, frame.harness)
             else:

@@ -1184,3 +1184,26 @@ async def test_runner_never_expands_an_installed_agents_variables(
 
     assert contents.status_code == 200, contents.text
     assert contents.headers["X-Agent-Session-Scoped"] == "true"
+
+
+async def test_deployment_hidden_server_catalog_preserves_user_agent_access(
+    client, agent_store, monkeypatch
+) -> None:
+    """Presentation filtering never changes user ownership or direct reads."""
+    server_id = builtin_agent_id("hidden-server")
+    agent_store.create(server_id, name="hidden-server", bundle_location="test:///hidden")
+    installed = (await _install(client, ALICE, "my-agent")).json()
+    monkeypatch.setenv("OMNIGENT_HIDDEN_BUILTIN_AGENTS", " hidden-server, my-agent ")
+
+    default = await client.get("/v1/agents", headers=ALICE)
+    assert default.status_code == 200
+    assert default.json()["data"] == []
+    assert await _my_names(client, ALICE) == ["my-agent"]
+    assert await _my_names(client, BOB) == []
+    assert (await client.get(f"/v1/agents/{server_id}", headers=ALICE)).status_code == 200
+    assert (await client.get(f"/v1/agents/{installed['id']}", headers=ALICE)).status_code == 200
+    assert (await client.get(f"/v1/agents/{installed['id']}", headers=BOB)).status_code == 404
+
+    monkeypatch.delenv("OMNIGENT_HIDDEN_BUILTIN_AGENTS")
+    restored = await client.get("/v1/agents", headers=ALICE)
+    assert [row["id"] for row in restored.json()["data"]] == [server_id]

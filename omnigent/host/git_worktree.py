@@ -423,7 +423,7 @@ def create_worktree(
         ``"feature/login"``. With ``existing_branch``, the pre-existing
         branch to check out instead.
     :param base_branch: Optional base ref, e.g. ``"main"``. ``None``
-        branches from the repo's current ``HEAD``. Invalid with
+        fetches origin and branches from its remote default. Invalid with
         ``existing_branch`` (an existing branch has no base to fork).
     :param existing_branch: When ``True``, check out the pre-existing
         ``branch_name`` into a fresh worktree instead of creating a new
@@ -475,6 +475,22 @@ def create_worktree(
         raise WorktreeError(
             f"a branch named {branch_name!r} already exists; choose a different branch name"
         )
+    if not existing_branch and base_branch is None:
+        # OmniDev's protected seed intentionally stays checked out at its
+        # original commit. Stock upstream therefore creates every blank-base UI
+        # worktree from stale HEAD and fetches only when a requested ref is
+        # missing. Fetch first and resolve the remote's default branch so the
+        # UI's normal "No worktree" -> generated branch path is current.
+        fetch = _run_git(["fetch", "--prune", "origin"], cwd=repo_root)
+        if fetch.returncode != 0:
+            raise _git_error("git fetch origin failed", fetch)
+        remote_head = _run_git(
+            ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
+            cwd=repo_root,
+        )
+        if remote_head.returncode != 0 or not remote_head.stdout.strip():
+            raise WorktreeError("origin default branch is not configured")
+        base_branch = remote_head.stdout.strip()
     if base_branch is not None:
         _ensure_base_resolvable(repo_root, base_branch)
     validated_commit: str | None = None

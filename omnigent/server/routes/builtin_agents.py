@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import os
 from collections.abc import Callable, Coroutine
 from typing import Any
 
@@ -65,6 +66,27 @@ _MULTIPART_OVERHEAD_BYTES = 64 * 1024
 _USER_AGENTS_PAGE_LIMIT = 50
 # How many sessions using an agent we count before reporting "N+".
 _IN_USE_COUNT_CAP = 100
+
+
+def _hidden_builtin_agent_names() -> frozenset[str]:
+    """Agent names omitted from the built-in catalog.
+
+    ``OMNIGENT_HIDDEN_BUILTIN_AGENTS`` is a comma-separated list of built-in
+    agent names to leave out of ``GET /v1/agents`` responses. Presentation
+    only: the rows stay in the store (their ids still resolve, existing
+    sessions and history are untouched), and unsetting the variable restores
+    them. Default (unset) hides nothing — behavior is unchanged unless an
+    operator opts in. Lets a deployment trim never-used harness tiles from
+    the web UI's new-session picker.
+
+    Read per request rather than cached at import: negligible cost at this
+    call rate, and an env change takes effect on restart without
+    module-reload ordering concerns.
+
+    :returns: The set of hidden agent names (possibly empty).
+    """
+    raw = os.environ.get("OMNIGENT_HIDDEN_BUILTIN_AGENTS", "")
+    return frozenset(name.strip() for name in raw.split(",") if name.strip())
 
 
 def _to_agent_object(agent: Agent, agent_cache: AgentCache) -> AgentObject:
@@ -465,8 +487,13 @@ def create_builtin_agents_router(
         user_id = _require_user(request, auth_provider)
         if scope != "user":
             page = agent_store.list(limit=limit, after=after, before=before, order=order)
+            # Opt-in presentation filter for the server catalog only. User-owned
+            # agents retain upstream ownership, pagination and editing behavior.
+            # Keep the unfiltered cursors so callers can still walk every page.
+            hidden = _hidden_builtin_agent_names()
+            visible = [a for a in page.data if a.name not in hidden]
             return PaginatedList(
-                data=[_to_agent_object(a, agent_cache) for a in page.data],
+                data=[_to_agent_object(a, agent_cache) for a in visible],
                 first_id=page.first_id,
                 last_id=page.last_id,
                 has_more=page.has_more,

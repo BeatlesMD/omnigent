@@ -33,6 +33,7 @@ import { useSessionActionRestrictions } from "@/hooks/useSessionActionRestrictio
 import { SESSION_ACTIONS_LOADING } from "@/lib/sessionCapabilities";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { forkSession, launchRunner } from "@/lib/sessionsApi";
+import { isAgentSelectable } from "@/lib/agentVisibility";
 import { useAvailableAgents, prefetchAvailableAgentDetails } from "@/hooks/useAvailableAgents";
 import type { AvailableAgent } from "@/hooks/useAvailableAgents";
 import { partitionAgentsByKind } from "@/lib/agentGrouping";
@@ -944,7 +945,13 @@ function SupportedForkSessionForm({
     [switchableAgents],
   );
 
+  // The source is read separately from the selectable catalog. Do not let
+  // "same as original" bypass visibility, including while metadata is loading.
+  const sourceSelectable = sourceAgent != null && isAgentSelectable(sourceAgent.name);
   const switching = agentChoice !== SAME_AS_SOURCE;
+  const agentChoiceValid = switching
+    ? switchableAgents.some((agent) => agent.id === agentChoice)
+    : sourceSelectable;
 
   // Source session snapshot — seeds the run-config pickers on a same-harness
   // fork (its current model / effort / permission mode). Cheap: the chat page
@@ -1150,7 +1157,7 @@ function SupportedForkSessionForm({
     }
     return null;
   })();
-  const canSubmit = submitBlocker === null;
+  const canSubmit = agentChoiceValid && submitBlocker === null;
   const fieldError = (field: ForkField) =>
     showErrors && submitBlocker?.field === field ? submitBlocker.message : null;
   useEffect(() => {
@@ -1250,6 +1257,7 @@ function SupportedForkSessionForm({
   }
 
   async function handleFork(): Promise<void> {
+    if (!agentChoiceValid) return;
     if (submitBlocker !== null) {
       // Point at what's missing rather than ignoring the click.
       setShowErrors(true);
@@ -1596,6 +1604,8 @@ function SupportedForkSessionForm({
                 {switching ? (
                   (switchableAgents.find((a) => a.id === agentChoice)?.display_name ??
                   sourceAgentDisplay)
+                ) : !sourceSelectable ? (
+                  "Choose an agent"
                 ) : (
                   <>
                     {sourceAgentDisplay}{" "}
@@ -1605,14 +1615,16 @@ function SupportedForkSessionForm({
               </SelectValue>
             </SelectTrigger>
             <SelectContent position="popper" align="start">
-              <SelectItem
-                value={SAME_AS_SOURCE}
-                data-testid="fork-session-agent-option-same"
-                className="text-sm"
-              >
-                {sourceAgentDisplay}{" "}
-                <span className="text-muted-foreground">(same as original session)</span>
-              </SelectItem>
+              {sourceSelectable && (
+                <SelectItem
+                  value={SAME_AS_SOURCE}
+                  data-testid="fork-session-agent-option-same"
+                  className="text-sm"
+                >
+                  {sourceAgentDisplay}{" "}
+                  <span className="text-muted-foreground">(same as original session)</span>
+                </SelectItem>
+              )}
               {builtinSwitchable.map((agent) => (
                 <SelectItem
                   key={agent.id}
@@ -1906,6 +1918,7 @@ function SupportedForkSessionForm({
           data-testid="fork-session-submit"
           onClick={handleFork}
           loading={submitting}
+          disabled={!agentChoiceValid}
           // Greyed but clickable: a blocked click points at the missing field.
           aria-disabled={!canSubmit || undefined}
           className="aria-disabled:opacity-50"

@@ -68,6 +68,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 /** Build owned sessions around the agent metadata under test. */
@@ -1481,4 +1482,149 @@ describe("useAvailableAgents user agents (scope=user)", () => {
     expect(result.current.data?.map((a) => a.id)).toEqual(["ag_polly", "ag_orion"]);
     expect(fetchMock.mock.calls.some(([url]) => url === USER_AGENTS_URL)).toBe(true);
   });
+});
+
+describe("deployment-hidden agent discovery", () => {
+  it("filters catalog, historical clones and project pins without editing cached history", async () => {
+    vi.stubEnv("VITE_HIDDEN_AGENT_NAMES", "homelab-observer,homelab-engineer,claude-sdk");
+    const names = ["homelab-observer", "homelab-engineer", "claude-sdk"];
+    const sessions = names.map((name, i) => ({
+      id: `conv_${i}`,
+      agent_id: `old_${i}`,
+      agent_name: `${name} (fork ag_a) (switch ag_b)`,
+      created_at: 1,
+      updated_at: 1000 - i,
+      permission_level: 4,
+    }));
+    const supported = [
+      "claude-native-ui",
+      "codex-native-ui",
+      "cursor-native-ui",
+      "pi-native-ui",
+      "polly",
+      "debby",
+    ];
+    const history = {
+      object: "list",
+      data: [
+        ...sessions,
+        {
+          id: "conv_custom",
+          agent_id: "custom",
+          agent_name: "my-sdk-agent",
+          created_at: 1,
+          updated_at: 900,
+          permission_level: 4,
+        },
+        {
+          id: "conv_hidden_pin",
+          agent_id: "pinned_hidden",
+          agent_name: "homelab-engineer (fork ag_pin)",
+          created_at: 1,
+          updated_at: 899,
+          permission_level: 4,
+        },
+        {
+          id: "conv_custom_pin",
+          agent_id: "pinned_custom",
+          agent_name: "my-pinned-sdk-agent",
+          created_at: 1,
+          updated_at: 898,
+          permission_level: 4,
+        },
+      ],
+      has_more: false,
+    };
+    routeFetch({
+      [BUILTINS_URL]: mockResponse({
+        data: [...names, ...supported].map((name) => ({
+          id: name,
+          name,
+          harness: name === "polly" || name === "debby" ? "claude-sdk" : null,
+        })),
+      }),
+      [MINE_URL]: mockResponse(history),
+      "/v1/sessions/conv_custom/agent": mockResponse({
+        id: "custom",
+        name: "my-sdk-agent",
+        harness: "claude-sdk",
+      }),
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    client.setQueryData(["session-history"], history);
+    const { result } = renderHook(
+      () =>
+        useAvailableAgents({
+          pinnedAgentIds: ["old_0", "pinned_hidden", "pinned_custom"],
+        }),
+      {
+        wrapper: ({ children }) => (
+          <QueryClientProvider client={client}>
+            <SidebarDataProvider config={{ ...sidebarConfig, sharedAvailable: false }}>
+              {children}
+            </SidebarDataProvider>
+          </QueryClientProvider>
+        ),
+      },
+    );
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true);
+      expect(result.current.isPlaceholderData).toBe(false);
+    });
+    expect(result.current.data?.map((a) => a.name)).toEqual([
+      ...supported,
+      "my-sdk-agent",
+      "my-pinned-sdk-agent",
+    ]);
+    await prefetchAvailableAgentDetails(
+      result.current.data!.find((a) => a.id === "custom")!,
+      client,
+    );
+    await waitFor(() =>
+      expect(result.current.data?.find((a) => a.id === "custom")?.harness).toBe("claude-sdk"),
+    );
+    expect(result.current.data?.some((a) => names.some((name) => a.name.startsWith(name)))).toBe(
+      false,
+    );
+    expect(client.getQueryData(["session-history"])).toEqual(history);
+    expect(history.data).toHaveLength(6);
+  });
+});
+
+it("filters deployment-hidden installed agents while retaining other custom agents", async () => {
+  vi.stubEnv("VITE_HIDDEN_AGENT_NAMES", "homelab-observer,homelab-engineer,claude-sdk");
+  routeFetch({
+    [BUILTINS_URL]: mockResponse({ data: [], has_more: false }),
+    [MINE_URL]: EMPTY_MINE,
+    "/v1/agents?scope=user&limit=50": mockResponse({
+      data: [
+        {
+          id: "retired",
+          name: "homelab-engineer (fork ag_old)",
+          harness: "claude-sdk",
+          builtin: false,
+        },
+        { id: "personal", name: "my-sdk-agent", harness: "claude-sdk", builtin: false },
+      ],
+      has_more: false,
+    }),
+  });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const { result } = renderHook(() => useAvailableAgents(), {
+    wrapper: ({ children }) => (
+      <QueryClientProvider client={client}>
+        <CapabilitiesProvider info={{ ...FALLBACK_SERVER_INFO, agent_install: true }}>
+          <SidebarDataProvider config={{ ...sidebarConfig, sharedAvailable: false }}>
+            {children}
+          </SidebarDataProvider>
+        </CapabilitiesProvider>
+      </QueryClientProvider>
+    ),
+  });
+  await waitFor(() => {
+    expect(result.current.isSuccess).toBe(true);
+    expect(result.current.isPlaceholderData).toBe(false);
+  });
+  expect(result.current.data?.map((agent) => agent.id)).toEqual(["personal"]);
+  expect(result.current.data?.[0]?.mine).toBe(true);
 });
